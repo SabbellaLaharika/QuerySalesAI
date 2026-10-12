@@ -1,0 +1,37 @@
+# docker-compose.yml
+# This file defines the services, networks, and volumes for the application.
+
+version: '3.8'
+
+services:
+  api:
+    # Build the Docker image from the Dockerfile in the current directory.
+    build: .
+    container_name: query_sales_api
+    # Expose port 8000 of the container to port 8000 on the host machine.
+    ports:
+      - "8000:8000"
+    # Pass environment variables to the service.
+    # ANTHROPIC_API_KEY is needed if you use the Claude API.
+    # Leave it blank or unset if using a local ollama model or Groq/NVIDIA.
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-haiku-4-5}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - NVIDIA_MODEL=${NVIDIA_MODEL:-meta/llama-3.1-70b-instruct}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - DATABASE_URL=sqlite:///./data/sales.db
+    # Mount the local ./data directory into the container at /app/data.
+    # This makes the sales.db file available to the application.
+    volumes:
+      - ./data:/app/data
+    # Health check to ensure the API is responsive before marking the container as healthy.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
