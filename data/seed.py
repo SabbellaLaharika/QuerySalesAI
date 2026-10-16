@@ -112,13 +112,17 @@ def generate_orders(customers, n_orders=2500):
     return orders
 
 def generate_order_items(orders, products, n_items=6250):
+    # Intentionally exclude the last 2 products so "never ordered" query has results.
+    # Products 24 and 25 (Premium Notebook Set & Electric Kettle) remain unordered.
+    orderable_products = products[:-2]
     items = []
     for i in range(1, n_items + 1):
         order_id   = random.choice(orders)[0]
-        product_id = random.choice(products)[0]
+        product_id = random.choice(orderable_products)[0]
         quantity   = random.randint(1, 5)
         items.append((order_id, product_id, quantity))
     return items
+
 
 def create_database():
     if os.path.exists(DB_PATH):

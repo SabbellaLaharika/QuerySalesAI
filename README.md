@@ -21,44 +21,44 @@ A secure, enterprise-grade AI Text-to-SQL service built with **FastAPI**, **Lang
 - [Environment Configuration](#-environment-configuration)
 - [API Documentation](#-api-documentation)
 - [Testing & Evaluation](#-testing--evaluation)
+- [Evaluation Report (evaluation.md)](evaluation.md)
 - [Supported LLM Providers](#-supported-llm-providers)
 
 ---
 
 ## 🏛 Architecture & Design
 
-```
-                     +---------------------------------------+
-                     |             Client / User             |
-                     +---------------------------------------+
-                                         │ POST /query
-                                         ▼
-                     +---------------------------------------+
-                     |         FastAPI Web Service           |
-                     |         (app/main.py: 8000)           |
-                     +---------------------------------------+
-                                         │
-                                         ▼
-                     +---------------------------------------+
-                     |          AI Sales Query Agent         |
-                     |            (app/agent.py)             |
-                     +-------------------+-------------------+
-                                         │
-                 ┌───────────────────────┴───────────────────────┐
-                 │ 1. Schema Request & Validation                │ 3. Execute SQL Query
-                 ▼                                               ▼
-+─────────────────────────────────+             +─────────────────────────────────+
-|    Model Context Protocol (MCP) |             |    Model Context Protocol (MCP) |
-|           list_tables           |             |          execute_query          |
-|         describe_schema         |             |  (Enforces SELECT-only policy)  |
-+────────────────+────────────────+             +────────────────+────────────────+
-                 │                                               │
-                 ▼                                               ▼
-+─────────────────────────────────+             +─────────────────────────────────+
-|      LLM Orchestration Layer    |             |    SQLite Database (sales.db)   |
-|   Claude / Groq / NVIDIA /      |             |         Read-Only Mode          |
-|            Ollama               |             |       (URI: mode=ro)            |
-+─────────────────────────────────+             +─────────────────────────────────+
+```mermaid
+flowchart TD
+    User["Client / User"] -->|"POST /query"| API["FastAPI Web Service<br/>(app/main.py)"]
+    API --> Agent["AI Sales Query Agent<br/>(app/agent.py)"]
+
+    subgraph MCP ["Model Context Protocol (MCP) Gatekeeper"]
+        MCP_Tools["MCP Tools<br/>• list_tables<br/>• describe_schema"]
+        MCP_Exec["execute_query<br/>(Strict SELECT-Only Enforcement)"]
+    end
+
+    subgraph LLMs ["Supported LLM Layer"]
+        Claude["Anthropic Claude"]
+        Groq["Groq Cloud"]
+        NVIDIA["NVIDIA NIM"]
+        Ollama["Local Ollama"]
+    end
+
+    subgraph Storage ["SQLite Storage"]
+        DB[("sales.db<br/>(Read-Only: mode=ro)")]
+    end
+
+    Agent -->|"1. Inspect Schema"| MCP_Tools
+    MCP_Tools -->|"Read Metadata"| DB
+    Agent -->|"2. Schema Context + Question"| LLMs
+    LLMs -->|"3. Synthesized SQL"| Agent
+    Agent -->|"4. Send SQL for Execution"| MCP_Exec
+    MCP_Exec -->|"5. Validate & Query (mode=ro)"| DB
+    DB -->|"6. Query Rows"| MCP_Exec
+    MCP_Exec -->|"7. Structured Results"| Agent
+    Agent -->|"8. JSON: SQL + Results + ChartData"| API
+    API -->|"200 OK Response"| User
 ```
 
 ### Request Lifecycle:
@@ -89,6 +89,41 @@ Traditional Text-to-SQL setups give LLMs direct database connection strings, cre
 ## 🗄️ Database Schema
 
 The SQLite database (`data/sales.db`) consists of four relational tables:
+
+```mermaid
+erDiagram
+    CUSTOMERS ||--o{ ORDERS : "places (1:N)"
+    ORDERS ||--|{ ORDER_ITEMS : "contains (1:N)"
+    PRODUCTS ||--o{ ORDER_ITEMS : "referenced in (1:N)"
+
+    CUSTOMERS {
+        int id PK "Primary Key"
+        string name "Customer Full Name"
+        string region "North, South, East, West, Central"
+        string segment "Consumer, Corporate, Home Office, Small Business"
+    }
+
+    ORDERS {
+        int id PK "Primary Key"
+        int customer_id FK "References CUSTOMERS(id)"
+        float amount "Order Total Amount"
+        string order_date "ISO Date (YYYY-MM-DD)"
+    }
+
+    PRODUCTS {
+        int id PK "Primary Key"
+        string name "Product Name"
+        string category "Technology, Furniture, Appliances, Office Supplies, Stationery"
+        float price "Product Unit Price"
+    }
+
+    ORDER_ITEMS {
+        int id PK "Primary Key (Auto-Increment)"
+        int order_id FK "References ORDERS(id)"
+        int product_id FK "References PRODUCTS(id)"
+        int quantity "Item Quantity (1-5)"
+    }
+```
 
 ```sql
 -- Customers master table (exactly 500 rows)
@@ -232,9 +267,9 @@ Interactive API documentation will be available at: **http://localhost:8000/docs
 | `ANTHROPIC_API_KEY` | Anthropic Claude API Key | *None (optional)* |
 | `ANTHROPIC_MODEL` | Claude model name | `claude-haiku-4-5` |
 | `GROQ_API_KEY` | Groq API Key | *None (optional)* |
-| `GROQ_MODEL` | Groq model name | `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | Groq model name | `openai/gpt-oss-120b` |
 | `NVIDIA_API_KEY` | NVIDIA NIM API Key | *None (optional)* |
-| `NVIDIA_MODEL` | NVIDIA NIM model name | `meta/llama-3.1-70b-instruct` |
+| `NVIDIA_MODEL` | NVIDIA NIM model name | `nvidia/nemotron-3.5-super-vl-120b-a12b`  |
 | `OLLAMA_MODEL` | Local Ollama model name | `llama3` |
 | `OLLAMA_BASE_URL` | Local Ollama endpoint | `http://localhost:11434` |
 
@@ -299,19 +334,18 @@ docker-compose exec api pytest -v
 ```
 
 ### Run End-to-End Evaluation Script (`evaluator.sh`)
-The project includes `evaluator.sh` which executes 5 predefined sales questions against the live API and verifies non-empty responses:
+The project includes `evaluator.sh` which executes sales queries against the live API and verifies non-empty responses:
 
 ```bash
+# Recommended: Inside running Docker container (includes preconfigured jq and curl)
+docker-compose exec api bash evaluator.sh
+
+# Or directly on host (requires running API on port 8000)
 chmod +x evaluator.sh
 ./evaluator.sh
 ```
 
-**Evaluated Questions:**
-1. *"Top 3 customers by order count"*
-2. *"Average order value by region"*
-3. *"Monthly revenue for 2024"*
-4. *"Products that have never been ordered"*
-5. *"Total spend by customer segment"*
+> 📋 **Detailed Results:** See [evaluation.md](evaluation.md) for complete query logs, generated SQL statements, JSON payloads, and Swagger UI verification across Groq and NVIDIA models.
 
 ---
 
@@ -319,14 +353,18 @@ chmod +x evaluator.sh
 
 The agent features automatic provider detection with graceful fallback:
 
-```
-Priority 1: Anthropic Claude (if ANTHROPIC_API_KEY present)
-     ↓
-Priority 2: Groq Cloud (if GROQ_API_KEY present)
-     ↓
-Priority 3: NVIDIA NIM (if NVIDIA_API_KEY present)
-     ↓
-Priority 4: Local Ollama (offline local fallback)
+```mermaid
+flowchart LR
+    P1["Priority 1<br/><b>Anthropic Claude</b><br/><code>ANTHROPIC_API_KEY</code>"] -->|"If Absent"| P2["Priority 2<br/><b>Groq Cloud</b><br/><code>GROQ_API_KEY</code>"]
+    P2 -->|"If Absent"| P3["Priority 3<br/><b>NVIDIA NIM</b><br/><code>NVIDIA_API_KEY</code>"]
+    P3 -->|"If Absent"| P4["Priority 4<br/><b>Local Ollama</b><br/><i>Offline Fallback</i>"]
 ```
 
-To switch models, simply set the corresponding environment variable in your `.env` file without modifying any code.
+To switch models, simply set the corresponding environment variable in your `.env` file without modifying any code:
+
+| Provider | Recommended / Tested Models |
+|---|---|
+| **Groq Cloud** | `openai/gpt-oss-120b` |
+| **NVIDIA NIM** | `nvidia/nemotron-3.5-super-vl-120b-a12b` |
+| **Anthropic** | `claude-haiku-4-5`, `claude-sonnet-4-5` |
+| **Local Ollama** | `llama3`, `mistral` |
